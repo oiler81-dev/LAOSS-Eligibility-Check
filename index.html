@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Eligibility Cross-Check</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="header">
+      <div>
+        <h1>Eligibility Cross-Check</h1>
+        <p class="sub">Upload Copay + MS1 + MS2. Output = patients in Copay that are missing from (MS1 ∪ MS2).</p>
+      </div>
+    </header>
+
+    <section class="card">
+      <h2>1) Upload files</h2>
+
+      <div class="grid">
+        <label class="field">
+          <span>Copay check (.xlsx)</span>
+          <input id="copayFile" type="file" accept=".xlsx,.xls" />
+        </label>
+
+        <label class="field">
+          <span>MS 1 (.xlsx)</span>
+          <input id="ms1File" type="file" accept=".xlsx,.xls" />
+        </label>
+
+        <label class="field">
+          <span>MS 2 (.xlsx)</span>
+          <input id="ms2File" type="file" accept=".xlsx,.xls" />
+        </label>
+      </div>
+
+      <div class="row">
+        <label class="toggle">
+          <input id="strictChartOnly" type="checkbox" />
+          <span>Strict mode: match ONLY by Chart # (no name fallback)</span>
+        </label>
+      </div>
+
+      <div class="row actions">
+        <button id="runBtn" class="btn primary" disabled>Compare</button>
+        <button id="clearBtn" class="btn" disabled>Clear</button>
+        <div id="status" class="status"></div>
+      </div>
+
+      <details class="help">
+        <summary>Notes / what this does</summary>
+        <ul>
+          <li>MS1 and MS2 are treated as one combined set.</li>
+          <li>Preferred match key is Chart #. If Chart # is blank, the app can fall back to name (unless Strict mode is ON).</li>
+          <li>Everything runs locally in the browser. Files are not uploaded to a server.</li>
+        </ul>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>2) Totals</h2>
+      <div class="totals" id="totals"></div>
+    </section>
+
+    <section class="card">
+      <div class="tableTop">
+        <h2>3) Missing in MS1/MS2 (Late Adds)</h2>
+        <div class="tableActions">
+          <button id="downloadCsvBtn" class="btn" disabled>Download CSV</button>
+        </div>
+      </div>
+      <div class="tableWrap">
+        <table id="resultTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span>Tip: If your exports ever change sheet names/columns, tell me and I’ll adjust the parser.</span>
+    </footer>
+  </div>
+
+  <!-- SheetJS (xlsx reader) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
