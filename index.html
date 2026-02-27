@@ -4,7 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Revised vs Reprint Cross-Check</title>
-  <link rel="stylesheet" href="./styles.css" />
+
+  <!-- cache-bust so updates show immediately -->
+  <link rel="stylesheet" href="./styles.css?v=4" />
 </head>
 <body>
   <div class="wrap">
@@ -53,9 +55,8 @@
       <details class="help">
         <summary>Notes</summary>
         <ul>
-          <li><b>Reprint − Revised</b> is the list you care about (late adds).</li>
-          <li>Preferred match key is <b>Chart #</b>. If Chart # is blank, the app can fall back to name (unless Strict mode is ON).</li>
-          <li>Everything runs in the browser. Nothing is uploaded anywhere.</li>
+          <li><b>Reprint − Revised</b> = late adds.</li>
+          <li>Everything runs locally in the browser. Files are not uploaded.</li>
         </ul>
       </details>
     </section>
@@ -101,6 +102,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="./app.js"></script>
+  <script src="./app.js?v=4"></script>
 </body>
 </html>
