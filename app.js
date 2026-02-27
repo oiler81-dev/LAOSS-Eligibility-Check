@@ -1,25 +1,34 @@
 /* global XLSX */
 
-const SHEET_NAME = "MasterAppointmentsWithInsurance"; // your exports use this
+const PREFERRED_SHEET = "MasterAppointmentsWithInsurance";
 const desiredCols = ["Patient","Chart #","Time","Provider Profile","Appt Type","Carrier","CoPay","Pat Bal"];
 
 const el = (id) => document.getElementById(id);
 
-const copayFile = el("copayFile");
-const ms1File = el("ms1File");
-const ms2File = el("ms2File");
+const revisedFile = el("revisedFile");
+const reprintFile = el("reprintFile");
 const runBtn = el("runBtn");
 const clearBtn = el("clearBtn");
 const statusEl = el("status");
 const totalsEl = el("totals");
+
 const strictChartOnlyEl = el("strictChartOnly");
-const downloadCsvBtn = el("downloadCsvBtn");
+const alsoShowReverseEl = el("alsoShowReverse");
 
-const table = el("resultTable");
-const thead = table.querySelector("thead");
-const tbody = table.querySelector("tbody");
+const lateAddsTable = el("lateAddsTable");
+const lateAddsThead = lateAddsTable.querySelector("thead");
+const lateAddsTbody = lateAddsTable.querySelector("tbody");
 
-let lastMissingRows = [];
+const reverseCard = el("reverseCard");
+const reverseTable = el("reverseTable");
+const reverseThead = reverseTable.querySelector("thead");
+const reverseTbody = reverseTable.querySelector("tbody");
+
+const downloadLateAddsCsvBtn = el("downloadLateAddsCsvBtn");
+const downloadReverseCsvBtn = el("downloadReverseCsvBtn");
+
+let lastLateAdds = [];
+let lastReverse = [];
 let lastHeaders = [];
 
 function setStatus(msg, tone="info"){
@@ -28,37 +37,46 @@ function setStatus(msg, tone="info"){
 }
 
 function filesReady(){
-  return copayFile.files.length && ms1File.files.length && ms2File.files.length;
+  return revisedFile.files.length && reprintFile.files.length;
 }
 
 function enableButtons(){
   const ready = filesReady();
   runBtn.disabled = !ready;
-  clearBtn.disabled = !ready && !lastMissingRows.length;
+  clearBtn.disabled = !ready && !lastLateAdds.length && !lastReverse.length;
 }
 
-[copayFile, ms1File, ms2File].forEach(inp => inp.addEventListener("change", () => {
+[revisedFile, reprintFile].forEach(inp => inp.addEventListener("change", () => {
   enableButtons();
-  setStatus(filesReady() ? "Files loaded. Click Compare." : "Upload all three files.");
+  setStatus(filesReady() ? "Files loaded. Click Compare." : "Upload both files.");
 }));
 
 clearBtn.addEventListener("click", () => {
-  copayFile.value = "";
-  ms1File.value = "";
-  ms2File.value = "";
-  lastMissingRows = [];
+  revisedFile.value = "";
+  reprintFile.value = "";
+  lastLateAdds = [];
+  lastReverse = [];
   lastHeaders = [];
   renderTotals(null);
-  renderTable([], []);
-  downloadCsvBtn.disabled = true;
+  renderTable(lateAddsThead, lateAddsTbody, [], []);
+  renderTable(reverseThead, reverseTbody, [], []);
+  reverseCard.style.display = "none";
+  downloadLateAddsCsvBtn.disabled = true;
+  downloadReverseCsvBtn.disabled = true;
   enableButtons();
   setStatus("Cleared.");
 });
 
-downloadCsvBtn.addEventListener("click", () => {
-  if (!lastMissingRows.length) return;
-  const csv = toCSV(lastHeaders, lastMissingRows);
+downloadLateAddsCsvBtn.addEventListener("click", () => {
+  if (!lastLateAdds.length) return;
+  const csv = toCSV(lastHeaders, lastLateAdds);
   downloadBlob(csv, `late_adds_${todayStamp()}.csv`, "text/csv;charset=utf-8;");
+});
+
+downloadReverseCsvBtn.addEventListener("click", () => {
+  if (!lastReverse.length) return;
+  const csv = toCSV(lastHeaders, lastReverse);
+  downloadBlob(csv, `revised_not_in_reprint_${todayStamp()}.csv`, "text/csv;charset=utf-8;");
 });
 
 runBtn.addEventListener("click", async () => {
@@ -67,48 +85,64 @@ runBtn.addEventListener("click", async () => {
     runBtn.disabled = true;
 
     const strictChartOnly = strictChartOnlyEl.checked;
+    const showReverse = alsoShowReverseEl.checked;
 
-    const copay = await readReport(copayFile.files[0]);
-    const ms1 = await readReport(ms1File.files[0]);
-    const ms2 = await readReport(ms2File.files[0]);
+    const revised = await readReport(revisedFile.files[0]);
+    const reprint = await readReport(reprintFile.files[0]);
 
     setStatus("Comparing...");
 
-    const msKeys = new Set([...makeKeys(ms1, strictChartOnly), ...makeKeys(ms2, strictChartOnly)].filter(Boolean));
+    // Key sets
+    const revisedKeys = new Set(makeKeys(revised.rows, strictChartOnly).filter(Boolean));
+    const reprintKeys = new Set(makeKeys(reprint.rows, strictChartOnly).filter(Boolean));
 
-    const copayKeys = makeKeys(copay, strictChartOnly);
+    // Reprint - Revised = late adds
+    const lateAddsRaw = [];
+    for (const row of reprint.rows){
+      const key = makeKey(row, strictChartOnly);
+      if (key && !revisedKeys.has(key)) lateAddsRaw.push(row);
+    }
 
-    const missing = [];
-    for (let i=0; i<copay.rows.length; i++){
-      const key = copayKeys[i];
-      if (!key) continue;
-      if (!msKeys.has(key)){
-        missing.push(copay.rows[i]);
+    // Revised - Reprint (optional)
+    const reverseRaw = [];
+    if (showReverse){
+      for (const row of revised.rows){
+        const key = makeKey(row, strictChartOnly);
+        if (key && !reprintKeys.has(key)) reverseRaw.push(row);
       }
     }
 
-    // de-dupe by Patient + Chart # if possible
-    const deduped = dedupeRows(missing);
-
-    // prepare headers and render
-    const headers = pickColumns(copay.headers, desiredCols);
-
-    lastMissingRows = deduped.map(r => projectRow(r, headers));
+    // Columns
+    const headers = pickColumns(reprint.headers, desiredCols);
     lastHeaders = headers;
 
+    // Dedup + project
+    lastLateAdds = projectRows(dedupeRows(lateAddsRaw), headers);
+    lastReverse = projectRows(dedupeRows(reverseRaw), headers);
+
     renderTotals({
-      copayRows: copay.rows.length,
-      ms1Rows: ms1.rows.length,
-      ms2Rows: ms2.rows.length,
-      uniqueCopayPatients: uniqueCount(copay.rows, strictChartOnly),
-      uniqueMsPatients: uniqueCount([...ms1.rows, ...ms2.rows], strictChartOnly),
-      missingCount: lastMissingRows.length
+      revisedRows: revised.rows.length,
+      reprintRows: reprint.rows.length,
+      revisedUnique: uniqueCount(revised.rows, strictChartOnly),
+      reprintUnique: uniqueCount(reprint.rows, strictChartOnly),
+      lateAdds: lastLateAdds.length,
+      reverse: lastReverse.length
     });
 
-    renderTable(headers, lastMissingRows);
-    downloadCsvBtn.disabled = lastMissingRows.length === 0;
+    renderTable(lateAddsThead, lateAddsTbody, headers, lastLateAdds);
+    downloadLateAddsCsvBtn.disabled = lastLateAdds.length === 0;
 
-    setStatus(`Done. Late adds found: ${lastMissingRows.length}`, "ok");
+    if (showReverse){
+      reverseCard.style.display = "";
+      renderTable(reverseThead, reverseTbody, headers, lastReverse);
+      downloadReverseCsvBtn.disabled = lastReverse.length === 0;
+    } else {
+      reverseCard.style.display = "none";
+      renderTable(reverseThead, reverseTbody, [], []);
+      downloadReverseCsvBtn.disabled = true;
+    }
+
+    setStatus(`Done. Late adds found: ${lastLateAdds.length}`, "ok");
   }catch(err){
     console.error(err);
     setStatus(err?.message || "Something went wrong.", "error");
@@ -152,24 +186,22 @@ function downloadBlob(content, filename, mime){
   URL.revokeObjectURL(url);
 }
 
-/**
- * Read report:
- * - Finds the header row by scanning first ~80 rows for 'Patient' and 'Chart'
- * - Returns { headers: [...], rows: [ {col:value,...}, ... ] }
- */
+/** Read report with header-row auto detect */
 async function readReport(file){
   const data = await file.arrayBuffer();
   const wb = XLSX.read(data, {type:"array"});
-  const ws = wb.Sheets[SHEET_NAME] || wb.Sheets[wb.SheetNames[0]];
+
+  // prefer expected sheet; fallback to first sheet
+  const sheetName = wb.Sheets[PREFERRED_SHEET] ? PREFERRED_SHEET : wb.SheetNames[0];
+  const ws = wb.Sheets[sheetName];
   if (!ws) throw new Error(`No sheets found in ${file.name}`);
 
-  // get raw rows as arrays
+  // raw as arrays
   const raw = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, blankrows:false});
-
   const hdrIndex = detectHeaderIndex(raw);
   if (hdrIndex === -1) throw new Error(`Could not detect header row in ${file.name}`);
 
-  const headers = raw[hdrIndex].map(h => (h ?? "").toString().trim());
+  const headers = raw[hdrIndex].map(h => (h ?? "").toString().trim()).filter(Boolean);
   const rows = [];
 
   for (let r = hdrIndex+1; r < raw.length; r++){
@@ -179,15 +211,13 @@ async function readReport(file){
     const obj = {};
     for (let c=0; c<headers.length; c++){
       const key = headers[c];
-      if (!key) continue;
       obj[key] = rowArr[c] ?? null;
     }
-    // require Patient column if present
     if (obj["Patient"] == null || obj["Patient"] === "") continue;
     rows.push(obj);
   }
 
-  return { headers, rows };
+  return { sheetName, headers, rows };
 }
 
 function detectHeaderIndex(raw){
@@ -212,7 +242,6 @@ function normChart(v){
   if (v == null) return null;
   const s = String(v).trim().replace(/\s+/g,"");
   if (!s) return null;
-  // handle numeric-like charts (e.g. 163794.0)
   const n = Number(s);
   if (!Number.isNaN(n)) return String(Math.trunc(n));
   return s.replace(/\.0$/,"");
@@ -222,24 +251,21 @@ function normName(v){
   if (v == null) return null;
   let s = String(v).trim();
   if (!s) return null;
-  s = s.replace(/^\*/,"").trim();     // remove leading '*'
+  s = s.replace(/^\*/,"").trim();
   s = s.replace(/\s+/g," ");
   return s.toUpperCase();
 }
 
-/**
- * Key rules:
- * - Default: Chart # if present, else name fallback
- * - Strict: Chart # only (name ignored)
- */
-function makeKeys(report, strictChartOnly){
-  return report.rows.map(r => {
-    const chart = normChart(r["Chart #"]);
-    if (chart) return `C:${chart}`;
-    if (strictChartOnly) return null;
-    const name = normName(r["Patient"]);
-    return name ? `N:${name}` : null;
-  });
+function makeKey(row, strictChartOnly){
+  const chart = normChart(row["Chart #"]);
+  if (chart) return `C:${chart}`;
+  if (strictChartOnly) return null;
+  const name = normName(row["Patient"]);
+  return name ? `N:${name}` : null;
+}
+
+function makeKeys(rows, strictChartOnly){
+  return rows.map(r => makeKey(r, strictChartOnly));
 }
 
 function dedupeRows(rows){
@@ -259,14 +285,15 @@ function dedupeRows(rows){
 function pickColumns(allHeaders, preferred){
   const set = new Set(allHeaders);
   const cols = preferred.filter(c => set.has(c));
-  // if none matched, just use all headers (rare)
   return cols.length ? cols : allHeaders.filter(Boolean);
 }
 
-function projectRow(row, headers){
-  const out = {};
-  for (const h of headers) out[h] = row[h] ?? "";
-  return out;
+function projectRows(rows, headers){
+  return rows.map(row => {
+    const out = {};
+    for (const h of headers) out[h] = row[h] ?? "";
+    return out;
+  });
 }
 
 function renderTotals(t){
@@ -274,12 +301,12 @@ function renderTotals(t){
   if (!t) return;
 
   const items = [
-    ["Copay rows", t.copayRows],
-    ["MS1 rows", t.ms1Rows],
-    ["MS2 rows", t.ms2Rows],
-    ["Unique patients in Copay", t.uniqueCopayPatients],
-    ["Unique patients in (MS1 ∪ MS2)", t.uniqueMsPatients],
-    ["Late adds (Copay not in MS1/MS2)", t.missingCount],
+    ["Revised rows", t.revisedRows],
+    ["Reprint rows", t.reprintRows],
+    ["Unique patients in Revised", t.revisedUnique],
+    ["Unique patients in Reprint", t.reprintUnique],
+    ["Late adds (Reprint not in Revised)", t.lateAdds],
+    ["Revised not in Reprint (optional)", t.reverse],
   ];
 
   for (const [label, value] of items){
@@ -293,12 +320,12 @@ function renderTotals(t){
   }
 }
 
-function renderTable(headers, rows){
-  thead.innerHTML = "";
-  tbody.innerHTML = "";
+function renderTable(headEl, bodyEl, headers, rows){
+  headEl.innerHTML = "";
+  bodyEl.innerHTML = "";
 
   if (!headers.length){
-    thead.innerHTML = `<tr><th>No results</th></tr>`;
+    headEl.innerHTML = `<tr><th>No results</th></tr>`;
     return;
   }
 
@@ -308,15 +335,15 @@ function renderTable(headers, rows){
     th.textContent = h;
     trh.appendChild(th);
   }
-  thead.appendChild(trh);
+  headEl.appendChild(trh);
 
   if (!rows.length){
     const tr = document.createElement("tr");
     const td = document.createElement("td");
     td.colSpan = headers.length;
-    td.textContent = "No late adds found.";
+    td.textContent = "No rows found.";
     tr.appendChild(td);
-    tbody.appendChild(tr);
+    bodyEl.appendChild(tr);
     return;
   }
 
@@ -327,7 +354,7 @@ function renderTable(headers, rows){
       td.textContent = r[h] ?? "";
       tr.appendChild(td);
     }
-    tbody.appendChild(tr);
+    bodyEl.appendChild(tr);
   }
 }
 
@@ -344,5 +371,5 @@ function uniqueCount(rows, strictChartOnly){
 }
 
 // init
-setStatus("Upload all three files.");
+setStatus("Upload Revised and Reprint.");
 enableButtons();
