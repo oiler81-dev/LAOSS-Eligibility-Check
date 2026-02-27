@@ -3,15 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Eligibility Cross-Check</title>
+  <title>Revised vs Reprint Cross-Check</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
   <div class="wrap">
     <header class="header">
       <div>
-        <h1>Eligibility Cross-Check</h1>
-        <p class="sub">Upload Copay + MS1 + MS2. Output = patients in Copay that are missing from (MS1 ∪ MS2).</p>
+        <h1>Revised vs Reprint Cross-Check</h1>
+        <p class="sub">
+          Upload Revised and Reprint. Output = patients in <b>Reprint</b> that do <b>not</b> appear in <b>Revised</b>.
+        </p>
       </div>
     </header>
 
@@ -20,18 +22,13 @@
 
       <div class="grid">
         <label class="field">
-          <span>Copay check (.xlsx)</span>
-          <input id="copayFile" type="file" accept=".xlsx,.xls" />
+          <span>Revised (.xlsx)</span>
+          <input id="revisedFile" type="file" accept=".xlsx,.xls" />
         </label>
 
         <label class="field">
-          <span>MS 1 (.xlsx)</span>
-          <input id="ms1File" type="file" accept=".xlsx,.xls" />
-        </label>
-
-        <label class="field">
-          <span>MS 2 (.xlsx)</span>
-          <input id="ms2File" type="file" accept=".xlsx,.xls" />
+          <span>Reprint (.xlsx)</span>
+          <input id="reprintFile" type="file" accept=".xlsx,.xls" />
         </label>
       </div>
 
@@ -39,6 +36,11 @@
         <label class="toggle">
           <input id="strictChartOnly" type="checkbox" />
           <span>Strict mode: match ONLY by Chart # (no name fallback)</span>
+        </label>
+
+        <label class="toggle">
+          <input id="alsoShowReverse" type="checkbox" />
+          <span>Also show “In Revised but not in Reprint”</span>
         </label>
       </div>
 
@@ -49,11 +51,11 @@
       </div>
 
       <details class="help">
-        <summary>Notes / what this does</summary>
+        <summary>Notes</summary>
         <ul>
-          <li>MS1 and MS2 are treated as one combined set.</li>
-          <li>Preferred match key is Chart #. If Chart # is blank, the app can fall back to name (unless Strict mode is ON).</li>
-          <li>Everything runs locally in the browser. Files are not uploaded to a server.</li>
+          <li><b>Reprint − Revised</b> is the list you care about (late adds).</li>
+          <li>Preferred match key is <b>Chart #</b>. If Chart # is blank, the app can fall back to name (unless Strict mode is ON).</li>
+          <li>Everything runs in the browser. Nothing is uploaded anywhere.</li>
         </ul>
       </details>
     </section>
@@ -65,13 +67,28 @@
 
     <section class="card">
       <div class="tableTop">
-        <h2>3) Missing in MS1/MS2 (Late Adds)</h2>
+        <h2>3) In Reprint but NOT in Revised (Late Adds)</h2>
         <div class="tableActions">
-          <button id="downloadCsvBtn" class="btn" disabled>Download CSV</button>
+          <button id="downloadLateAddsCsvBtn" class="btn" disabled>Download Late Adds CSV</button>
         </div>
       </div>
       <div class="tableWrap">
-        <table id="resultTable">
+        <table id="lateAddsTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card" id="reverseCard" style="display:none;">
+      <div class="tableTop">
+        <h2>4) In Revised but NOT in Reprint</h2>
+        <div class="tableActions">
+          <button id="downloadReverseCsvBtn" class="btn" disabled>Download Reverse CSV</button>
+        </div>
+      </div>
+      <div class="tableWrap">
+        <table id="reverseTable">
           <thead></thead>
           <tbody></tbody>
         </table>
@@ -79,11 +96,10 @@
     </section>
 
     <footer class="footer">
-      <span>Tip: If your exports ever change sheet names/columns, tell me and I’ll adjust the parser.</span>
+      <span>If your exports ever change sheet name or columns, tell me and I’ll update the parser.</span>
     </footer>
   </div>
 
-  <!-- SheetJS (xlsx reader) -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="./app.js"></script>
 </body>
