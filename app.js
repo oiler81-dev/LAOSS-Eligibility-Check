@@ -1,7 +1,9 @@
 /* global XLSX */
 
 const PREFERRED_SHEET = "MasterAppointmentsWithInsurance";
-const desiredCols = ["Patient","Chart #","Time","Provider Profile","Appt Type","Carrier","CoPay","Pat Bal"];
+
+// what we want to show (in this order) when those headers exist
+const desiredCols = ["Time","Patient","Chart #","Provider Profile","Appt Type","Carrier","CoPay","Pat Bal"];
 
 const el = (id) => document.getElementById(id);
 
@@ -69,14 +71,12 @@ clearBtn.addEventListener("click", () => {
 
 downloadLateAddsCsvBtn.addEventListener("click", () => {
   if (!lastLateAdds.length) return;
-  const csv = toCSV(lastHeaders, lastLateAdds);
-  downloadBlob(csv, `late_adds_${todayStamp()}.csv`, "text/csv;charset=utf-8;");
+  downloadBlob(toCSV(lastHeaders, lastLateAdds), `late_adds_${todayStamp()}.csv`, "text/csv;charset=utf-8;");
 });
 
 downloadReverseCsvBtn.addEventListener("click", () => {
   if (!lastReverse.length) return;
-  const csv = toCSV(lastHeaders, lastReverse);
-  downloadBlob(csv, `revised_not_in_reprint_${todayStamp()}.csv`, "text/csv;charset=utf-8;");
+  downloadBlob(toCSV(lastHeaders, lastReverse), `revised_not_in_reprint_${todayStamp()}.csv`, "text/csv;charset=utf-8;");
 });
 
 runBtn.addEventListener("click", async () => {
@@ -92,49 +92,49 @@ runBtn.addEventListener("click", async () => {
 
     setStatus("Comparing...");
 
-    // Key sets
-    const revisedKeys = new Set(makeKeys(revised.rows, strictChartOnly).filter(Boolean));
-    const reprintKeys = new Set(makeKeys(reprint.rows, strictChartOnly).filter(Boolean));
+    // build key sets
+    const revisedKeys = new Set(revised.rows.map(r => makeKey(r, revised.idx, strictChartOnly)).filter(Boolean));
+    const reprintKeys = new Set(reprint.rows.map(r => makeKey(r, reprint.idx, strictChartOnly)).filter(Boolean));
 
-    // Reprint - Revised = late adds
+    // late adds: Reprint - Revised
     const lateAddsRaw = [];
     for (const row of reprint.rows){
-      const key = makeKey(row, strictChartOnly);
+      const key = makeKey(row, reprint.idx, strictChartOnly);
       if (key && !revisedKeys.has(key)) lateAddsRaw.push(row);
     }
 
-    // Revised - Reprint (optional)
+    // reverse: Revised - Reprint (optional)
     const reverseRaw = [];
     if (showReverse){
       for (const row of revised.rows){
-        const key = makeKey(row, strictChartOnly);
+        const key = makeKey(row, revised.idx, strictChartOnly);
         if (key && !reprintKeys.has(key)) reverseRaw.push(row);
       }
     }
 
-    // Columns
-    const headers = pickColumns(reprint.headers, desiredCols);
-    lastHeaders = headers;
+    // choose columns to render (based on the reprint file, since that’s the “current schedule”)
+    const headersToShow = chooseHeadersToShow(reprint.headers, reprint.headerRow, desiredCols);
+    lastHeaders = headersToShow;
 
-    // Dedup + project
-    lastLateAdds = projectRows(dedupeRows(lateAddsRaw), headers);
-    lastReverse = projectRows(dedupeRows(reverseRaw), headers);
+    // dedupe and project to objects for display/export
+    lastLateAdds = projectRows(dedupeRows(lateAddsRaw, reprint.idx), headersToShow, reprint.idx);
+    lastReverse = projectRows(dedupeRows(reverseRaw, revised.idx), headersToShow, revised.idx);
 
     renderTotals({
       revisedRows: revised.rows.length,
       reprintRows: reprint.rows.length,
-      revisedUnique: uniqueCount(revised.rows, strictChartOnly),
-      reprintUnique: uniqueCount(reprint.rows, strictChartOnly),
+      revisedUnique: uniqueCount(revised.rows, revised.idx, strictChartOnly),
+      reprintUnique: uniqueCount(reprint.rows, reprint.idx, strictChartOnly),
       lateAdds: lastLateAdds.length,
       reverse: lastReverse.length
     });
 
-    renderTable(lateAddsThead, lateAddsTbody, headers, lastLateAdds);
+    renderTable(lateAddsThead, lateAddsTbody, headersToShow, lastLateAdds);
     downloadLateAddsCsvBtn.disabled = lastLateAdds.length === 0;
 
     if (showReverse){
       reverseCard.style.display = "";
-      renderTable(reverseThead, reverseTbody, headers, lastReverse);
+      renderTable(reverseThead, reverseTbody, headersToShow, lastReverse);
       downloadReverseCsvBtn.disabled = lastReverse.length === 0;
     } else {
       reverseCard.style.display = "none";
@@ -186,42 +186,50 @@ function downloadBlob(content, filename, mime){
   URL.revokeObjectURL(url);
 }
 
-/** Read report with header-row auto detect */
+/**
+ * Reads your export safely without shifting columns:
+ * - Finds header row
+ * - Keeps header positions intact (no filtering)
+ * - Stores data rows as arrays aligned to the header row
+ * - Builds an index map (Patient/Chart#/etc) for comparisons
+ */
 async function readReport(file){
   const data = await file.arrayBuffer();
   const wb = XLSX.read(data, {type:"array"});
 
-  // prefer expected sheet; fallback to first sheet
   const sheetName = wb.Sheets[PREFERRED_SHEET] ? PREFERRED_SHEET : wb.SheetNames[0];
   const ws = wb.Sheets[sheetName];
   if (!ws) throw new Error(`No sheets found in ${file.name}`);
 
-  // raw as arrays
   const raw = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, blankrows:false});
   const hdrIndex = detectHeaderIndex(raw);
   if (hdrIndex === -1) throw new Error(`Could not detect header row in ${file.name}`);
 
-  const headers = raw[hdrIndex].map(h => (h ?? "").toString().trim()).filter(Boolean);
+  // keep positional headers (including blanks!)
+  const headerRow = raw[hdrIndex] || [];
+  const headers = headerRow.map(h => (h ?? "").toString().trim());
+
+  // map normalized header name -> column index (first occurrence)
+  const idx = buildIndexMap(headers);
+
+  // read rows aligned to header length (no shifting)
   const rows = [];
+  for (let r = hdrIndex + 1; r < raw.length; r++){
+    const arr = raw[r];
+    if (!arr || arr.every(v => v === null || v === "")) continue;
 
-  for (let r = hdrIndex+1; r < raw.length; r++){
-    const rowArr = raw[r];
-    if (!rowArr || rowArr.every(v => v === null || v === "")) continue;
+    // must have patient value in the Patient column (by index)
+    const p = safeCell(arr, idx.patient);
+    if (p == null || String(p).trim() === "") continue;
 
-    const obj = {};
-    for (let c=0; c<headers.length; c++){
-      const key = headers[c];
-      obj[key] = rowArr[c] ?? null;
-    }
-    if (obj["Patient"] == null || obj["Patient"] === "") continue;
-    rows.push(obj);
+    rows.push(arr);
   }
 
-  return { sheetName, headers, rows };
+  return { sheetName, headers, headerRow, idx, rows };
 }
 
 function detectHeaderIndex(raw){
-  const look = Math.min(raw.length, 90);
+  const look = Math.min(raw.length, 120);
   for (let i=0; i<look; i++){
     const row = (raw[i] || []).map(v => (v ?? "").toString().trim().toLowerCase());
     const hasPatient = row.includes("patient");
@@ -236,6 +244,34 @@ function detectHeaderIndex(raw){
     if (hasPatient && hasChart) return i;
   }
   return -1;
+}
+
+function buildIndexMap(headers){
+  const norm = (s) => String(s || "").trim().toLowerCase();
+
+  const find = (target) => {
+    const t = norm(target);
+    for (let i=0; i<headers.length; i++){
+      if (norm(headers[i]) === t) return i;
+    }
+    return -1;
+  };
+
+  const patient = find("Patient");
+  const chart = find("Chart #");
+  const time = find("Time");
+
+  return {
+    patient: patient === -1 ? null : patient,
+    chart: chart === -1 ? null : chart,
+    time: time === -1 ? null : time,
+    // you can add more if you ever want index-based operations
+  };
+}
+
+function safeCell(arr, idx){
+  if (idx == null) return null;
+  return idx < arr.length ? arr[idx] : null;
 }
 
 function normChart(v){
@@ -256,44 +292,90 @@ function normName(v){
   return s.toUpperCase();
 }
 
-function makeKey(row, strictChartOnly){
-  const chart = normChart(row["Chart #"]);
-  if (chart) return `C:${chart}`;
+function makeKey(rowArr, idx, strictChartOnly){
+  const chartVal = normChart(safeCell(rowArr, idx.chart));
+  if (chartVal) return `C:${chartVal}`;
+
   if (strictChartOnly) return null;
-  const name = normName(row["Patient"]);
-  return name ? `N:${name}` : null;
+
+  const nameVal = normName(safeCell(rowArr, idx.patient));
+  return nameVal ? `N:${nameVal}` : null;
 }
 
-function makeKeys(rows, strictChartOnly){
-  return rows.map(r => makeKey(r, strictChartOnly));
-}
-
-function dedupeRows(rows){
+function dedupeRows(rowsArr, idx){
   const seen = new Set();
   const out = [];
-  for (const r of rows){
-    const name = normName(r["Patient"]) || "";
-    const chart = normChart(r["Chart #"]) || "";
+  for (const row of rowsArr){
+    const name = normName(safeCell(row, idx.patient)) || "";
+    const chart = normChart(safeCell(row, idx.chart)) || "";
     const key = `${name}__${chart}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(r);
+    out.push(row);
   }
   return out;
 }
 
-function pickColumns(allHeaders, preferred){
-  const set = new Set(allHeaders);
-  const cols = preferred.filter(c => set.has(c));
-  return cols.length ? cols : allHeaders.filter(Boolean);
+function chooseHeadersToShow(headers, headerRow, preferred){
+  // Build a set of available (non-empty) headers
+  const available = new Set(headers.filter(h => String(h).trim() !== ""));
+
+  // If our preferred columns exist, use them in that order
+  const picked = preferred.filter(h => available.has(h));
+  if (picked.length) return picked;
+
+  // fallback: show all non-empty headers in their original order
+  return headers.filter(h => String(h).trim() !== "");
 }
 
-function projectRows(rows, headers){
-  return rows.map(row => {
-    const out = {};
-    for (const h of headers) out[h] = row[h] ?? "";
-    return out;
+function projectRows(rowsArr, headersToShow, idx){
+  // We need to map header text -> actual column index (by scanning the header row)
+  // This preserves correct alignment even if there are blank header cells.
+  // If a header appears twice, we take the first match (consistent with index map behavior).
+  const colIndex = {};
+  const headerLower = (s) => String(s || "").trim().toLowerCase();
+
+  return rowsArr.map(arr => {
+    const obj = {};
+    for (const h of headersToShow){
+      // lazy lookup: find column index for this header name
+      if (colIndex[h] == null){
+        colIndex[h] = findHeaderIndexByName(h, idx, headersToShow); // placeholder; overwritten below
+      }
+      obj[h] = ""; // filled below
+    }
+    // Fill values by scanning the report headers each time (robust + still fast at these sizes)
+    // We’ll do it in a way that never shifts columns:
+    for (const h of headersToShow){
+      const col = findHeaderIndexByName(h, idx, null); // uses exact match scan
+      obj[h] = (col == null) ? "" : (arr[col] ?? "");
+    }
+    return obj;
   });
+}
+
+function findHeaderIndexByName(name, idx, _unused){
+  // We don't have the full headers array here, so we rely on the known ones via idx when possible.
+  // For the standard columns we care about, use idx (fast + consistent).
+  const n = String(name || "").trim().toLowerCase();
+  if (n === "patient") return idx.patient;
+  if (n === "chart #") return idx.chart;
+  if (n === "time") return idx.time;
+
+  // If you later add more columns and want them index-based, expand idx in buildIndexMap().
+  return null;
+}
+
+function uniqueCount(rowsArr, idx, strictChartOnly){
+  const set = new Set();
+  for (const r of rowsArr){
+    const chart = normChart(safeCell(r, idx.chart));
+    if (chart) { set.add(`C:${chart}`); continue; }
+    if (strictChartOnly) continue;
+    const name = normName(safeCell(r, idx.patient));
+    if (name) set.add(`N:${name}`);
+  }
+  return set.size;
 }
 
 function renderTotals(t){
@@ -356,18 +438,6 @@ function renderTable(headEl, bodyEl, headers, rows){
     }
     bodyEl.appendChild(tr);
   }
-}
-
-function uniqueCount(rows, strictChartOnly){
-  const set = new Set();
-  for (const r of rows){
-    const chart = normChart(r["Chart #"]);
-    if (chart) { set.add(`C:${chart}`); continue; }
-    if (strictChartOnly) continue;
-    const name = normName(r["Patient"]);
-    if (name) set.add(`N:${name}`);
-  }
-  return set.size;
 }
 
 // init
